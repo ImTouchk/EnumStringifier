@@ -1,137 +1,280 @@
+#include <string_view>
 #include <filesystem>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <thread>
 
-using namespace std::filesystem;
 using namespace std;
+namespace fs = std::filesystem;
 
-#include "Example.hpp"
+#ifdef STRINGIFIER_DEBUG
+#define DEBUG_ONLY if constexpr(1)
+#else
+#define DEBUG_ONLY if constexpr(0)
+#endif
 
-void GenerateOutput(const string& Path, vector<string>& EnumMembers, string& EnumName) {
-	if (exists(Path) && is_regular_file(Path)) {
-		cout << "\x1B[33m[INFO] Output file already exists. Overwriting...\033[0m\n";
-		remove(Path);
+template <typename T>
+class VElementPtr { public:
+	vector<T>* list = nullptr;
+	int position = -1;
+
+	bool null() { return (position == -1 || list == nullptr); }
+	bool equals(const VElementPtr<T>& Other) { return (this->list == Other.list && this->position == Other.position); }
+	T* get() { if (null()) return nullptr;  return &(*list)[position]; }
+
+	friend ostream& operator<<(ostream& Stream, VElementPtr<T> pointer) { return Stream << pointer.get(); }
+	bool operator==(const VElementPtr<T>& Other) { return equals(Other); }
+};
+
+class Block { public:
+	VElementPtr<Block> parent;
+	unsigned start = 0;
+	unsigned end = 0;
+};
+
+class Token { public:
+	VElementPtr<Block> block;
+	string_view value;
+	unsigned start = 0;
+	unsigned end = 0;
+};
+
+class Enumerated { public:
+	VElementPtr<Block> block;
+	VElementPtr<Token> name;
+	bool is_class = false;
+	unsigned start = 0;
+	unsigned end = 0;
+};
+
+vector<Enumerated> Enums;
+vector<Token> Tokens;
+vector<Block> Blocks;
+string Source;
+
+class Scanner { public:
+	VElementPtr<Block> CurrentBlock;
+	unsigned Current = 0;
+	unsigned Line = 0;
+	char End = '\0';
+
+	inline bool IsAtEnd() { return Current >= Source.size(); }
+	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
+	inline bool IsNumeric(char& Character) { return Character >= '0' && Character <= '9'; }
+	inline char* Peek() { if (IsAtEnd()) return &End; return &Source[Current]; }
+	inline char* PeekNext() { if (Current + 1 >= Source.size()) return &End; return &Source[Current + 1]; }
+	inline char* Advance() { Current++; return &Source[Current - 1]; }
+
+	void Identifier() {
+		unsigned Start = Current - 1;
+		while (IsAlpha(*Peek())) Advance();
+		Token FoundToken;
+		FoundToken.block.position = CurrentBlock.position;
+		FoundToken.block.list = &Blocks;
+		FoundToken.start = Start;
+		FoundToken.end = Current;
+		FoundToken.value = Source;
+		FoundToken.value.remove_prefix(Start);
+		FoundToken.value.remove_suffix(Source.size() - Current);
+		Tokens.push_back(FoundToken);
 	}
 
-	ofstream OutputFile = ofstream(Path);
-	cout << "\x1B[92m[INFO] Started writing the output to a file...\033[0m\n";
+	void BeginBlock() {
+		Block FoundBlock;
+		FoundBlock.parent.list = &Blocks;
+		FoundBlock.parent.position = CurrentBlock.position;
+		FoundBlock.start = Current;
+		Blocks.push_back(FoundBlock);
+		CurrentBlock.list = &Blocks;
+		CurrentBlock.position = (Blocks.size() - 1);
+	}
 
-	auto CreateFunction = [&](const std::string& Variable) {
-		OutputFile << "std::string " << EnumName << "ToString(" << Variable << " Member) {\n";
-		OutputFile << "    switch(Member) {\n";
+	void EndBlock() {
+		if (CurrentBlock.null()) { cout << "Error - Unexpected '}' found at line " << Line << ".\n"; return; }
+		CurrentBlock.get()->end = Current;
+		CurrentBlock.position = CurrentBlock.get()->parent.position;
+	}
 
-		for (string& Member : EnumMembers)
-			OutputFile << "        case " << EnumName << "::" << Member << ": return \"" << EnumName << ":" << Member << "\";\n";
-
-		OutputFile << "        default: return \"null\";\n";
-		OutputFile << "    }\n";
-		OutputFile << "}\n";
-	};
-
-	auto OverloadShift = [&](const std::string& Variable) {
-		OutputFile << "std::ostream& operator<<(std::ostream& Stream, " << Variable << " Member) {\n";
-		OutputFile << "    return Stream << " << EnumName << "ToString(Member);\n";
-		OutputFile << "}\n";
-	};
-
-	OutputFile << "#include <string>\n";
-	OutputFile << "#include <iostream>\n\n";
-
-	const string ReferenceVar = "const " + EnumName + "&";
-	const string PointerVar = EnumName + "*";
-	
-	CreateFunction(ReferenceVar);
-	CreateFunction(PointerVar);
-
-	OverloadShift(ReferenceVar);
-	OverloadShift(PointerVar);
-
-	cout << "\x1B[92m[INFO] File successfully written. Stopping...\033[0m\n";
-	OutputFile.close();
-}
-
-void AnalyzeEnumFile(const path& Path, vector<string>& EnumMembers, string& EnumName) {
-	vector<string> Tokens;
-	{
-		// Split the file into words, separated by spaces.
-		// Encapsulated the code into a block so that `EnumFile` and `Line`
-		// will go out of scope after they are no longer needed.
-		fstream EnumFile = fstream(Path);
-		string Line;
-		while (getline(EnumFile, Line)) {
-			stringstream LineStream = stringstream(Line);
-
-			for (string Token; LineStream >> Token;)
-				Tokens.push_back(Token);
+	void SkipLine() {
+		while (!IsAtEnd()) {
+			char Character = *Advance();
+			if (Character == '\n') { Line++; return; }
 		}
-		EnumFile.close();
 	}
 
-	unsigned int Beginning = 0;
-	unsigned int End = 0;
-	bool EnumBlock = false;
-
-	// Find out what the enum is called, at which word it starts, and
-	// at which it ends. This will not work well if you have more than
-	// one enum.
-	for (unsigned int i = 0; i < Tokens.size(); i++) {
-		if (Tokens[i] == "enum") {
-			if (Tokens[i + 1] == "class") EnumName = Tokens[i + 2];
-			else EnumName = Tokens[i + 1];
-			EnumBlock = true;
-		} else if (Tokens[i] == "{") {
-			// Only set `Beginning` if the identifier `enum` was found,
-			// otherwise if there's something else besides the enum itself
-			// in the source file, the program will go crazy.
-			if(EnumBlock) Beginning = i;
-		} else if (Tokens[i] == "};") {
-			// Same thing here.
-			if(EnumBlock) End = i;
-			break;
+	inline void ScanCharacter() {
+		char Character = *Advance();
+		switch (Character) {
+		case '/': if (*Peek() == '/') SkipLine(); break;
+		case '#': SkipLine(); break;
+		case '\n': Line++; break;
+		case '{': BeginBlock(); break;
+		case '}': EndBlock(); break;
+		default: if (IsAlpha(Character)) Identifier(); break;
 		}
 	}
-	cout << "\x1B[92m[INFO] Found enum " << EnumName << "..." << "\033[0m\n";
 
-	for (unsigned int i = Beginning + 1; i < End; i++) {
-		if (Tokens[i] == "=") {
-			i = i + 1; // Ignore the value assigned to a member, we don't actually need it.
-			continue;
+	void ScanSource() {
+		DEBUG_ONLY "Debug - Scanner started.\n";
+		CurrentBlock.list = &Blocks;
+		CurrentBlock.position = -1;
+		while (!IsAtEnd()) {
+			ScanCharacter();
 		}
-		EnumMembers.push_back(Tokens[i]);
+		DEBUG_ONLY "Debug - Scanner finished.\n";
+	}
+};
+
+class Parser { public:
+	Enumerated CurrentEnum;
+	unsigned Current = 0;
+
+	inline bool IsAtEnd() { return Current >= Tokens.size(); }
+	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
+	inline Token* Advance() { Current++; return &Tokens[Current - 1]; }
+
+	void Enumerator() {
+		CurrentEnum = Enumerated();
+		string_view Name;
+		unsigned Start = Current - 1;
+		unsigned Consumed = 0;
+
+		CurrentEnum.name.list = &Tokens;
+		if (Tokens[Start + 1].value.compare("class") != 0) { CurrentEnum.name.position = Start + 1; CurrentEnum.is_class = false; Consumed = 1; }
+		else { CurrentEnum.name.position = Start + 2; CurrentEnum.is_class = true; Consumed = 3; }
+		CurrentEnum.block.position = Tokens[Start + Consumed + 1].block.position;
+		CurrentEnum.block.list = &Blocks;
+		Current += Consumed;
+
+		DEBUG_ONLY cout << "Debug - Discovered enum '" << CurrentEnum.name.get()->value << "'. Is also class: " << (CurrentEnum.is_class ? "yes.\n" : "no.\n");
+		while (!IsAtEnd()) {
+			Token Next = *Advance();
+			if (!Next.block.equals(CurrentEnum.block)) {
+				DEBUG_ONLY cout << "Debug - Completed parsing enum.\n";
+				Enums.push_back(CurrentEnum);
+				Current--;
+				return;
+			}
+			DEBUG_ONLY cout << "Debug - Parsing token '" << Next.value << "' inside enum.\n";
+		}
+		// This is called only when the file has ended.
+		DEBUG_ONLY cout << "Debug - Completed parsing enum.\n";
+		Enums.push_back(CurrentEnum);
 	}
 
-	// Remove any remaining commas in the members.
-	for (string& Member : EnumMembers)
-		Member.erase(remove(Member.begin(), Member.end(), ','), Member.end());
-
-	if (EnumMembers.size() == 0) {
-		cout << "\x1B[91m[ERROR] Couldn't find any enum members.\033[0m\n";
-		cout << "\x1B[91m[ERROR] Make sure your file is valid.\033[0m\n";
-	} else {
-		cout << "\x1B[92m[INFO] Found a total of " << EnumMembers.size() << " enum members...\033[0m\n";
+	void ParseToken() {
+		Token Next = *Advance();
+		if (Next.value.compare("enum") == 0) {
+			DEBUG_ONLY cout << "Debug - Found keyword 'enum'.\n";
+			Enumerator();
+		}
 	}
-}
+
+	void ParseTokens() {
+		DEBUG_ONLY cout << "Debug - Parser started.\n";
+		while (!IsAtEnd()) {
+			ParseToken();
+		}
+		DEBUG_ONLY cout << "Debug - Parser finished.\n";
+	}
+};
+
+class Writer { public:
+	void WriteResult(const string_view& Path) {
+		if (fs::exists(Path)) { fs::remove(Path); }
+		ofstream FileIO = ofstream(Path.data());
+		if (!FileIO.is_open()) {
+			cout << "Error - Couldn't open file.\n";
+			return;
+		}
+
+		if (Enums.size() == 0) {
+			cout << "Error - There is nothing to write to the file.\n";
+			FileIO.close();
+			return;
+		}
+
+		FileIO << "#include <ostream>\n";
+		FileIO << "#include <string>\n\n";
+
+		// Declaration of the enum itself, this is not very useful
+		// because it doesn't keep track of the values assigned to
+		// each enumerator in the source file (eg. MY_ENUMERATOR = 1)
+		// but in most cases it is fine.
+		for (Enumerated& FoundEnum : Enums) {
+			DEBUG_ONLY cout << "Debug - Writing enum '" << FoundEnum.name.get()->value << "' to file.\n";
+			FileIO << "// ----\n\n";
+			FileIO << (FoundEnum.is_class ? "enum class " : "enum ") << FoundEnum.name.get()->value << " {\n";
+			for (Token& Enumerator : Tokens) {
+				if (!Enumerator.block.equals(FoundEnum.block)) continue;
+				FileIO << "    " << Enumerator.value << ",\n";
+			}
+			FileIO << "};\n\n";
+
+			FileIO << "std::string __" << FoundEnum.name.get()->value << "ToString(" << FoundEnum.name.get()->value << " Enumerator) {\n";
+			FileIO << "    switch(Enumerator) {\n";
+			for (Token& Enumerator : Tokens) {
+				if (!Enumerator.block.equals(FoundEnum.block)) continue;
+				FileIO << "    case " << FoundEnum.name.get()->value << "::" << Enumerator.value << ": ";
+				FileIO << "return \"" << Enumerator.value << "\";\n";
+			}
+			FileIO << "    }\n";
+			FileIO << "}\n\n";
+
+			FileIO << "std::ostream& operator<<(std::ostream& Stream, " << FoundEnum.name.get()->value << " Enumerator) {\n";
+			FileIO << "    return Stream << __" << FoundEnum.name.get()->value << "ToString(Enumerator);\n";
+			FileIO << "}\n\n";
+			FileIO << "// ----\n\n";
+		}
+		FileIO.close();
+	}
+};
 
 int main(int argc, char* argv[]) {
-	if (argc < 2) {
-		cout << "\x1B[91m[ERROR] You haven't specified a file to open.\033[0m\n";
-		return -1;
+	string FilePath = " ";
+	bool FoundPath = false;
+	
+	if (argc >= 2) {
+		FilePath = argv[1];
 	}
 
-	path Path = argv[1];
-	if (!exists(Path) || !is_regular_file(Path)) {
-		cout << "\x1B[91m[ERROR] The path specified is invalid.\033[0m\n";
-		return -1;
+	if (!fs::exists(FilePath)) {
+		cout << "Please enter the path of the file with your enum definitions.\n";
+		while (!fs::exists(FilePath) || !fs::is_regular_file(FilePath)) {
+			cout << ">> "; cin >> FilePath;
+		}
+		FoundPath = true;
 	}
-	string OutputPath = Path.parent_path().string() + "\\enum_output.hpp";
 
-	vector<string> EnumMembers; string EnumName;
-	AnalyzeEnumFile(Path, EnumMembers, EnumName);
-	GenerateOutput(OutputPath, EnumMembers, EnumName);
+	fstream File = fstream(FilePath); 
+	
+	{
+		stringstream Temporary;
+		Temporary << File.rdbuf();
+		Source = Temporary.str();
+	}
 
-	cout << "\x1B[92m[INFO] Done! File saved to '" << OutputPath << "'.\033[0m\n";
+	// This code is probably windows-only, I added it for testing purposes only
+	DEBUG_ONLY system("cls");
+	DEBUG_ONLY cout << "Debug - Source code:\n" << Source << "\n";
+	DEBUG_ONLY this_thread::sleep_for(chrono::seconds(1));
+	DEBUG_ONLY system("cls");
+	DEBUG_ONLY this_thread::sleep_for(chrono::seconds(1));
+
+	Scanner MyScanner = Scanner();
+	Parser MyParser = Parser();
+	Writer MyWriter = Writer();
+	MyScanner.ScanSource();
+	MyParser.ParseTokens();
+	
+	string OutputPath = "";
+	cout << "Please enter the path to the file in which you'd like the output to be stored at.\n";
+	cout << ">> "; cin >> OutputPath;
+
+	MyWriter.WriteResult(OutputPath);
+	cout << "Info - Process finished.\n";
 	return 0;
 }
