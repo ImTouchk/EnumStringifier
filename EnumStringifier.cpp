@@ -11,10 +11,20 @@
 using namespace std;
 namespace fs = std::filesystem;
 
+#define STRINGIFIER_DEBUG
+
 #ifdef STRINGIFIER_DEBUG
 #define DEBUG_ONLY if constexpr(1)
 #else
 #define DEBUG_ONLY if constexpr(0)
+#endif
+
+#ifdef _WINDOWS
+	#define CLEAR_CONSOLE system("cls")
+#else
+	#ifdef __unix__
+		#define CLEAR_CONSOLE system("clear")
+	#endif
 #endif
 
 template <typename T>
@@ -30,7 +40,9 @@ class VElementPtr { public:
 	bool operator==(const VElementPtr<T>& Other) { return equals(Other); }
 };
 
+class Namespace;
 class Block { public:
+	VElementPtr<Namespace> parent_namespace;
 	VElementPtr<Block> parent;
 	unsigned start = 0;
 	unsigned end = 0;
@@ -43,7 +55,16 @@ class Token { public:
 	unsigned end = 0;
 };
 
+class Namespace { public:
+	VElementPtr<Namespace> parent;
+	VElementPtr<Token> name;
+	bool is_anon = false;
+	unsigned start = 0;
+	unsigned end = 0;
+};
+
 class Enumerated { public:
+	VElementPtr<Namespace> nmspace;
 	VElementPtr<Block> block;
 	VElementPtr<Token> name;
 	bool is_class = false;
@@ -52,11 +73,13 @@ class Enumerated { public:
 };
 
 vector<Enumerated> Enums;
+vector<Namespace> Namespaces;
 vector<Token> Tokens;
 vector<Block> Blocks;
 string Source;
 
 class Scanner { public:
+	VElementPtr<Namespace> CurrentNamespace;
 	VElementPtr<Block> CurrentBlock;
 	unsigned Current = 0;
 	unsigned Line = 0;
@@ -81,12 +104,47 @@ class Scanner { public:
 		FoundToken.value.remove_prefix(Start);
 		FoundToken.value.remove_suffix(Source.size() - Current);
 		Tokens.push_back(FoundToken);
+
+		if(FoundToken.value.compare("namespace") == 0) { BeginNamespace(); }
+	}
+
+	void BeginNamespace() {
+		Namespace FoundNamespace;
+		FoundNamespace.name.list = &Tokens;
+		FoundNamespace.parent.list = &Namespaces;
+		FoundNamespace.parent.position = CurrentNamespace.position;
+		FoundNamespace.start = Current;
+		
+		if(*Peek() == '{') {
+			Advance();
+			FoundNamespace.is_anon = true;
+			FoundNamespace.name.position = -1;
+			DEBUG_ONLY cout << "Debug - Found anonymous namespace.\n";
+		} else {
+			Advance(); Identifier();
+			FoundNamespace.is_anon = false;
+			FoundNamespace.name.position = (Tokens.size() - 1);
+			DEBUG_ONLY cout << "Debug - Found namespace '" << FoundNamespace.name.get()->value << "'.\n";
+		}
+
+		Namespaces.push_back(FoundNamespace);
+		CurrentNamespace.position = (Namespaces.size() - 1);
+		CurrentNamespace.list = &Namespaces;
+	}
+
+	void TryEndNamespace() {
+		if(CurrentNamespace.null()) return;
+		DEBUG_ONLY if(!CurrentNamespace.get()->name.null()) cout << "Debug - Ended namespace '" << CurrentNamespace.get()->name.get()->value << "'.\n";
+		CurrentNamespace.get()->end = Current;
+		CurrentNamespace.position = CurrentNamespace.get()->parent.position;
 	}
 
 	void BeginBlock() {
 		Block FoundBlock;
-		FoundBlock.parent.list = &Blocks;
+		FoundBlock.parent_namespace.position = CurrentNamespace.position;
+		FoundBlock.parent_namespace.list = &Namespaces;
 		FoundBlock.parent.position = CurrentBlock.position;
+		FoundBlock.parent.list = &Blocks;
 		FoundBlock.start = Current;
 		Blocks.push_back(FoundBlock);
 		CurrentBlock.list = &Blocks;
@@ -95,6 +153,7 @@ class Scanner { public:
 
 	void EndBlock() {
 		if (CurrentBlock.null()) { cout << "Error - Unexpected '}' found at line " << Line << ".\n"; return; }
+		TryEndNamespace();
 		CurrentBlock.get()->end = Current;
 		CurrentBlock.position = CurrentBlock.get()->parent.position;
 	}
@@ -120,12 +179,14 @@ class Scanner { public:
 
 	void ScanSource() {
 		DEBUG_ONLY "Debug - Scanner started.\n";
+		CurrentNamespace.list = &Namespaces;
 		CurrentBlock.list = &Blocks;
+		CurrentNamespace.position = -1;
 		CurrentBlock.position = -1;
 		while (!IsAtEnd()) {
 			ScanCharacter();
 		}
-		DEBUG_ONLY "Debug - Scanner finished.\n";
+		DEBUG_ONLY "Debug - Scanner finished.\n\n";
 	}
 };
 
@@ -144,6 +205,12 @@ class Parser { public:
 		unsigned Consumed = 0;
 
 		CurrentEnum.name.list = &Tokens;
+
+		if(!Tokens[Start].block.get()->parent_namespace.null()) {
+			CurrentEnum.nmspace.position = Tokens[Start].block.get()->parent_namespace.position;
+			CurrentEnum.nmspace.list = &Namespaces;
+		}
+
 		if (Tokens[Start + 1].value.compare("class") != 0) { CurrentEnum.name.position = Start + 1; CurrentEnum.is_class = false; Consumed = 1; }
 		else { CurrentEnum.name.position = Start + 2; CurrentEnum.is_class = true; Consumed = 3; }
 		CurrentEnum.block.position = Tokens[Start + Consumed + 1].block.position;
@@ -179,7 +246,7 @@ class Parser { public:
 		while (!IsAtEnd()) {
 			ParseToken();
 		}
-		DEBUG_ONLY cout << "Debug - Parser finished.\n";
+		DEBUG_ONLY cout << "Debug - Parser finished.\n\n";
 	}
 };
 
@@ -199,7 +266,7 @@ class Writer { public:
 		}
 
 		FileIO << "#ifndef __ENUMTOSTRING_H\n";
-		FileIO << "#define __ENUMTOSTRING_H\n";
+		FileIO << "#define __ENUMTOSTRING_H\n\n";
 
 		FileIO << "#include <ostream>\n";
 		FileIO << "#include <string>\n\n";
@@ -263,10 +330,10 @@ int main(int argc, char* argv[]) {
 	}
 
 	// This code is probably windows-only, I added it for testing purposes only
-	DEBUG_ONLY system("cls");
+	DEBUG_ONLY CLEAR_CONSOLE;
 	DEBUG_ONLY cout << "Debug - Source code:\n" << Source << "\n";
 	DEBUG_ONLY this_thread::sleep_for(chrono::seconds(1));
-	DEBUG_ONLY system("cls");
+	DEBUG_ONLY CLEAR_CONSOLE;
 	DEBUG_ONLY this_thread::sleep_for(chrono::seconds(1));
 
 	Scanner MyScanner = Scanner();

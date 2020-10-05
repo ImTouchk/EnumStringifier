@@ -4,14 +4,23 @@
 #include <string>
 #include <iostream>
 
-enum class SomeEnum {
-	AMember = 0,
-	SomethingElse,
-	CaSeSeNsItIvE = 2,
-	LOL = 3,
-	SpaGHeTti,
-	etc = 5
-};
+namespace {
+	enum Foods {
+		Pizza,
+		Pasta,
+		ScrambledEggs,
+		Cake
+	};
+}
+
+namespace Nature {
+	enum class Animals {
+		Parrots,
+		Cat,
+		Dogs,
+		Monkeys,
+	};
+}
 
 
 #endif
