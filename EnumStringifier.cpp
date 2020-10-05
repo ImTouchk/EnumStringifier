@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <thread>
+#include <random>
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -197,6 +198,9 @@ class Writer { public:
 			return;
 		}
 
+		FileIO << "#ifndef __ENUMTOSTRING_H\n";
+		FileIO << "#define __ENUMTOSTRING_H\n";
+
 		FileIO << "#include <ostream>\n";
 		FileIO << "#include <string>\n\n";
 
@@ -229,6 +233,7 @@ class Writer { public:
 			FileIO << "}\n\n";
 			FileIO << "// ----\n\n";
 		}
+		FileIO << "#endif\n";
 		FileIO.close();
 	}
 };
