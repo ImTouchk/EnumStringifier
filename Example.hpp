@@ -32,5 +32,9 @@ namespace          City      {
 	};
 }
 
+/*
+	This is a multiple line comment that
+	should be cleaned by the sanitizer
+*/
 
 #endif
