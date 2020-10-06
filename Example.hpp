@@ -22,5 +22,15 @@ namespace Nature {
 	};
 }
 
+namespace          City      {
+	enum class FastFoodChains {
+		McDonalds,
+		KFC,
+		TacoBell,
+		Subway,
+		ChickFilA,
+	};
+}
+
 
 #endif
