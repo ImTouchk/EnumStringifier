@@ -128,6 +128,23 @@ class Scanner { public:
 	inline char* PeekNext() { if(Current + 1 >= Source.size()) return &End; return &Source[Current + 1];}
 	inline char* Advance() { Current++; return &Source[Current - 1]; }
 
+	inline void BeginBlock() {
+		Block FoundBlock{};
+		FoundBlock.nmspace = "";
+		FoundBlock.start = Current;
+		FoundBlock.parent.list = &Blocks;
+		if(!CurrentBlock.null()) { FoundBlock.parent.position = CurrentBlock.position; }
+		Blocks.push_back(FoundBlock);
+		CurrentBlock.list = &Blocks;
+		CurrentBlock.position = (Blocks.size() - 1);
+	}
+
+	inline void EndBlock() {
+		if(CurrentBlock.null()) { cout << "Error - Found unexpected '}'.\n"; return; }
+		CurrentBlock.get()->end = Current;
+		CurrentBlock.position = CurrentBlock.get()->parent.position;
+	}
+
 	inline void Identifier() {
 		unsigned Start = Current;
 		while(IsAlpha(*Peek())) Advance();
@@ -145,7 +162,11 @@ class Scanner { public:
 
 	inline void ScanCharacter() {
 		char Character = *Advance();
-		if(IsAlpha(Character)) Identifier();
+		switch(Character) {
+			case '{': BeginBlock(); break;
+			case '}': EndBlock(); break;
+			default: if(IsAlpha(Character)) Identifier(); break;
+		}
 	}
 
 	void ScanSource() {
@@ -428,10 +449,7 @@ int main(int argc, char* argv[]) {
 
 	Scanner MyScanner = Scanner();
 	MyScanner.ScanSource();
-
-	for(const Token& FoundToken : Tokens) {
-		cout << FoundToken.value << ",";
-	}
+	
 	// string OutputPath = "";
 	// cout << "Please enter the path to the file in which you'd like the output to be stored at.\n";
 	// cout << ">> "; cin >> OutputPath;
