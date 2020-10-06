@@ -106,13 +106,40 @@ class Sanitizer { public:
 		Source.erase(remove(Source.begin(), Source.end(), Character), Source.end());
 	}
 
-	void SanitizeSource() {
-		RemoveCharacter('\v'); RemoveCharacter('\t');
+	inline void RemoveConsecutive(const char& Character) {
 		for(int i = 1; i < Source.size(); ) {
-			if(Source[i] != ' ') { i++; continue; }
+			if(Source[i] != Character) { i++; continue; }
 			if(Source[i] == Source[i - 1]) { Source.erase(i, 1); }
 			else { i++; }
 		}
+	}
+
+	void SanitizeSource() {
+		RemoveCharacter('\v'); RemoveCharacter('\t');
+
+		for(int i = 0; i < Source.size() - 1; i++) {
+			bool SkipLine = false;
+			if(Source[i] == '#') SkipLine = true;
+			if(Source[i] == '/' && Source[i + 1] == '/') SkipLine = true;
+			if(!SkipLine) continue;
+
+			unsigned Start = i;
+			while(Source[i] != '\n') i++;
+			Source.erase(Start, (i + 1) - Start);
+			i = Start - 1;
+		}
+
+		// Remove multiple line comments
+		for(int i = 0; i < Source.size() - 1; i++) {
+			if(Source[i] == '/' && Source[i + 1] == '*') {
+				unsigned Start = i;
+				while(i != (Source.size() - 2)) { if(Source[i] == '*' && Source[i + 1] == '\\') break; i++; }
+				Source.erase(Start, (i + 1) - Start);
+				i = Start - 1;
+			}
+		}
+
+		RemoveConsecutive(' '); RemoveConsecutive('\n');
 	}
 };
 
@@ -447,9 +474,12 @@ int main(int argc, char* argv[]) {
 	Sanitizer MySanitizer = Sanitizer();
 	MySanitizer.SanitizeSource();
 
+	DEBUG_ONLY CLEAR_CONSOLE;
+	DEBUG_ONLY cout << "Debug - Sanitized code:\n" << Source;
+
 	Scanner MyScanner = Scanner();
 	MyScanner.ScanSource();
-	
+
 	// string OutputPath = "";
 	// cout << "Please enter the path to the file in which you'd like the output to be stored at.\n";
 	// cout << ">> "; cin >> OutputPath;
