@@ -8,302 +8,362 @@
 #include <thread>
 #include <random>
 
+// Note: Considering this program only uses the standard library,
+// I have decided to use the std namespace for better code
+// readability.
 using namespace std;
 namespace fs = std::filesystem;
 
-#define STRINGIFIER_DEBUG
+// This define enables console logging, shouldn't be enabled in
+// most circumstances.
+#define PROGRAM_DEBUG_MODE
 
-#ifdef STRINGIFIER_DEBUG
+// This solution is pretty clever considering `constexpr` if
+// statements get resolved at compile-time AFAIK, and it makes
+// the code look pretty clean.
+#ifdef PROGRAM_DEBUG_MODE
 #define DEBUG_ONLY if constexpr(1)
 #else
 #define DEBUG_ONLY if constexpr(0)
 #endif
 
+// Not really necessary, but why not.
 #ifdef _WINDOWS
-	#define CLEAR_CONSOLE system("cls")
-#else
-	#ifdef __unix__
-		#define CLEAR_CONSOLE system("clear")
-	#endif
+#undef CLEAR_CONSOLE
+#define CLEAR_CONSOLE system("cls")
 #endif
 
+#ifdef __unix__
+#undef CLEAR_CONSOLE
+#define CLEAR_CONSOLE system("clear")
+#endif
+
+// Class declarations
+// Note: Local copies are preffered over pointers to
+// vector elements in cases in which the value is also part
+// of the current class and it is not a heavy object.
+
+// Note: I am also using structs instead of classes for
+// containers, and classes for actual implementations.
+// Using `public` in structs is deliberate, in order to
+// (hopefully) make their purpose clear.
 template <typename T>
-class VElementPtr { public:
+struct VElementPtr { public:
 	vector<T>* list = nullptr;
 	int position = -1;
 
-	bool null() { return (position == -1 || list == nullptr); }
-	bool equals(const VElementPtr<T>& Other) { return (this->list == Other.list && this->position == Other.position); }
-	T* get() { if (null()) return nullptr;  return &(*list)[position]; }
-
-	friend ostream& operator<<(ostream& Stream, VElementPtr<T> pointer) { return Stream << pointer.get(); }
-	bool operator==(const VElementPtr<T>& Other) { return equals(Other); }
+	inline T* get() const { if(null()) return nullptr; return list[position]; }
+	inline bool null() const { return (position == -1 || list == nullptr); }
+	inline bool equals(const VElementPtr<T>& other) const { return (this->position == other.position); }
+	inline bool operator==(const VElementPtr<T>& other) const { return equals(other); }
+	inline VElementPtr& operator=(const VElementPtr<T>& other) {
+		if(this != &other) {
+			this->position = other.position;
+			this->list = other.list;
+		}
+		return *this;
+	}
 };
 
-class Namespace;
-class Block { public:
-	VElementPtr<Namespace> parent_namespace;
+struct Block { public:
 	VElementPtr<Block> parent;
+	string_view nmspace;
 	unsigned start = 0;
 	unsigned end = 0;
 };
 
-class Token { public:
+struct Token { public:
 	VElementPtr<Block> block;
 	string_view value;
 	unsigned start = 0;
 	unsigned end = 0;
 };
 
-class Namespace { public:
+struct Namespace { public:
 	VElementPtr<Namespace> parent;
-	VElementPtr<Token> name;
+	string_view name;
+	unsigned start = 0;
+	unsigned end = 0;
 	bool is_anon = false;
-	unsigned start = 0;
-	unsigned end = 0;
 };
 
-class Enumerated { public:
-	VElementPtr<Namespace> nmspace;
+struct Enumerated { public:
 	VElementPtr<Block> block;
-	VElementPtr<Token> name;
-	bool is_class = false;
+	string_view name;
+	Namespace nmspace;
 	unsigned start = 0;
 	unsigned end = 0;
+	bool is_class = false;
 };
 
+// Global variable declarations
 vector<Enumerated> Enums;
 vector<Namespace> Namespaces;
 vector<Token> Tokens;
 vector<Block> Blocks;
 string Source;
 
-class Scanner { public:
-	VElementPtr<Namespace> CurrentNamespace;
-	VElementPtr<Block> CurrentBlock;
-	unsigned Current = 0;
-	unsigned Line = 0;
-	char End = '\0';
+// Actual implementation
 
-	inline bool IsAtEnd() { return Current >= Source.size(); }
-	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
-	inline bool IsNumeric(char& Character) { return Character >= '0' && Character <= '9'; }
-	inline char* Peek() { if (IsAtEnd()) return &End; return &Source[Current]; }
-	inline char* PeekNext() { if (Current + 1 >= Source.size()) return &End; return &Source[Current + 1]; }
-	inline char* Advance() { Current++; return &Source[Current - 1]; }
-
-	void Identifier() {
-		unsigned Start = Current - 1;
-		while (IsAlpha(*Peek())) Advance();
-		Token FoundToken;
-		FoundToken.block.position = CurrentBlock.position;
-		FoundToken.block.list = &Blocks;
-		FoundToken.start = Start;
-		FoundToken.end = Current;
-		FoundToken.value = Source;
-		FoundToken.value.remove_prefix(Start);
-		FoundToken.value.remove_suffix(Source.size() - Current);
-		Tokens.push_back(FoundToken);
-
-		if(FoundToken.value.compare("namespace") == 0) { BeginNamespace(); }
+// This class cleans the source code of unnecessary spaces
+// to make life easier for the scanner.
+class Sanitizer { public:
+	inline void RemoveCharacter(const char& Character) {
+		Source.erase(remove(Source.begin(), Source.end(), Character), Source.end());
 	}
 
-	void BeginNamespace() {
-		Namespace FoundNamespace;
-		FoundNamespace.name.list = &Tokens;
-		FoundNamespace.parent.list = &Namespaces;
-		FoundNamespace.parent.position = CurrentNamespace.position;
-		FoundNamespace.start = Current;
+	void SanitizeSource() {
+		RemoveCharacter('\v'); RemoveCharacter('\t');
+		cout << "Test!\n";
+		for(int i = 1; i < Source.size(); ) {
+			if(Source[i] != ' ') { i++; continue; }
+			if(Source[i] == Source[i - 1]) { Source.erase(i, 1); }
+			else { i++; }
+		}
+	}
+};
+
+// class Scanner { public:
+// 	VElementPtr<Namespace> CurrentNamespace;
+// 	VElementPtr<Block> CurrentBlock;
+// 	unsigned Current = 0;
+// 	unsigned Line = 0;
+// 	char End = '\0';
+
+// 	inline bool IsAtEnd() { return Current >= Source.size(); }
+// 	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
+// 	inline bool IsNumeric(char& Character) { return Character >= '0' && Character <= '9'; }
+// 	inline char* Peek() { if (IsAtEnd()) return &End; return &Source[Current]; }
+// 	inline char* PeekNext() { if (Current + 1 >= Source.size()) return &End; return &Source[Current + 1]; }
+// 	inline char* Advance() { Current++; return &Source[Current - 1]; }
+
+// 	void Identifier() {
+// 		unsigned Start = Current - 1;
+// 		while (IsAlpha(*Peek())) Advance();
+// 		Token FoundToken;
+// 		FoundToken.block.position = CurrentBlock.position;
+// 		FoundToken.block.list = &Blocks;
+// 		FoundToken.start = Start;
+// 		FoundToken.end = Current;
+// 		FoundToken.value = Source;
+// 		FoundToken.value.remove_prefix(Start);
+// 		FoundToken.value.remove_suffix(Source.size() - Current);
+// 		Tokens.push_back(FoundToken);
+
+// 		if(FoundToken.value.compare("namespace") == 0) { BeginNamespace(); }
+// 	}
+
+// 	void BeginNamespace() {
+// 		Namespace FoundNamespace;
+// 		FoundNamespace.name.list = &Tokens;
+// 		FoundNamespace.parent.list = &Namespaces;
+// 		FoundNamespace.parent.position = CurrentNamespace.position;
+// 		FoundNamespace.start = Current;
 		
-		if(*Peek() == '{') {
-			Advance();
-			FoundNamespace.is_anon = true;
-			FoundNamespace.name.position = -1;
-			DEBUG_ONLY cout << "Debug - Found anonymous namespace.\n";
-		} else {
-			Advance(); Identifier();
-			FoundNamespace.is_anon = false;
-			FoundNamespace.name.position = (Tokens.size() - 1);
-			DEBUG_ONLY cout << "Debug - Found namespace '" << FoundNamespace.name.get()->value << "'.\n";
-		}
+// 		while(*Peek() == ' ') Current++;
 
-		Namespaces.push_back(FoundNamespace);
-		CurrentNamespace.position = (Namespaces.size() - 1);
-		CurrentNamespace.list = &Namespaces;
-	}
+// 		if(*Peek() == '{') {
+// 			Advance();
+// 			FoundNamespace.is_anon = true;
+// 			FoundNamespace.name.position = -1;
+// 			DEBUG_ONLY cout << "Debug - Found anonymous namespace.\n";
+// 		} else {
+// 			while(*Peek() == ' ') { Current++; } Identifier();
+// 			FoundNamespace.is_anon = false;
+// 			FoundNamespace.name.position = (Tokens.size() - 1);
+// 			DEBUG_ONLY cout << "Debug - Found namespace '" << FoundNamespace.name.get()->value << "'.\n";
+// 		}
 
-	void TryEndNamespace() {
-		if(CurrentNamespace.null()) return;
-		DEBUG_ONLY if(!CurrentNamespace.get()->name.null()) cout << "Debug - Ended namespace '" << CurrentNamespace.get()->name.get()->value << "'.\n";
-		CurrentNamespace.get()->end = Current;
-		CurrentNamespace.position = CurrentNamespace.get()->parent.position;
-	}
+// 		Namespaces.push_back(FoundNamespace);
+// 		CurrentNamespace.position = (Namespaces.size() - 1);
+// 		CurrentNamespace.list = &Namespaces;
+// 	}
 
-	void BeginBlock() {
-		Block FoundBlock;
-		FoundBlock.parent_namespace.position = CurrentNamespace.position;
-		FoundBlock.parent_namespace.list = &Namespaces;
-		FoundBlock.parent.position = CurrentBlock.position;
-		FoundBlock.parent.list = &Blocks;
-		FoundBlock.start = Current;
-		Blocks.push_back(FoundBlock);
-		CurrentBlock.list = &Blocks;
-		CurrentBlock.position = (Blocks.size() - 1);
-	}
+// 	void TryEndNamespace() {
+// 		if(CurrentNamespace.null()) return;
+// 		DEBUG_ONLY if(!CurrentNamespace.get()->name.null()) cout << "Debug - Ended namespace '" << CurrentNamespace.get()->name.get()->value << "'.\n";
+// 		CurrentNamespace.get()->end = Current;
+// 		CurrentNamespace.position = CurrentNamespace.get()->parent.position;
+// 	}
 
-	void EndBlock() {
-		if (CurrentBlock.null()) { cout << "Error - Unexpected '}' found at line " << Line << ".\n"; return; }
-		TryEndNamespace();
-		CurrentBlock.get()->end = Current;
-		CurrentBlock.position = CurrentBlock.get()->parent.position;
-	}
+// 	void BeginBlock() {
+// 		Block FoundBlock;
+// 		FoundBlock.parent_namespace.position = CurrentNamespace.position;
+// 		FoundBlock.parent_namespace.list = &Namespaces;
+// 		FoundBlock.parent.position = CurrentBlock.position;
+// 		FoundBlock.parent.list = &Blocks;
+// 		FoundBlock.start = Current;
+// 		Blocks.push_back(FoundBlock);
+// 		CurrentBlock.list = &Blocks;
+// 		CurrentBlock.position = (Blocks.size() - 1);
+// 	}
 
-	void SkipLine() {
-		while (!IsAtEnd()) {
-			char Character = *Advance();
-			if (Character == '\n') { Line++; return; }
-		}
-	}
+// 	void EndBlock() {
+// 		if (CurrentBlock.null()) { cout << "Error - Unexpected '}' found at line " << Line << ".\n"; return; }
+// 		TryEndNamespace();
+// 		CurrentBlock.get()->end = Current;
+// 		CurrentBlock.position = CurrentBlock.get()->parent.position;
+// 	}
 
-	inline void ScanCharacter() {
-		char Character = *Advance();
-		switch (Character) {
-		case '/': if (*Peek() == '/') SkipLine(); break;
-		case '#': SkipLine(); break;
-		case '\n': Line++; break;
-		case '{': BeginBlock(); break;
-		case '}': EndBlock(); break;
-		default: if (IsAlpha(Character)) Identifier(); break;
-		}
-	}
+// 	void SkipLine() {
+// 		while (!IsAtEnd()) {
+// 			char Character = *Advance();
+// 			if (Character == '\n') { Line++; return; }
+// 		}
+// 	}
 
-	void ScanSource() {
-		DEBUG_ONLY "Debug - Scanner started.\n";
-		CurrentNamespace.list = &Namespaces;
-		CurrentBlock.list = &Blocks;
-		CurrentNamespace.position = -1;
-		CurrentBlock.position = -1;
-		while (!IsAtEnd()) {
-			ScanCharacter();
-		}
-		DEBUG_ONLY "Debug - Scanner finished.\n\n";
-	}
-};
+// 	inline void ScanCharacter() {
+// 		char Character = *Advance();
+// 		switch (Character) {
+// 		case '/': if (*Peek() == '/') SkipLine(); break;
+// 		case '#': SkipLine(); break;
+// 		case '\n': Line++; break;
+// 		case '{': BeginBlock(); break;
+// 		case '}': EndBlock(); break;
+// 		default: if (IsAlpha(Character)) Identifier(); break;
+// 		}
+// 	}
 
-class Parser { public:
-	Enumerated CurrentEnum;
-	unsigned Current = 0;
+// 	void ScanSource() {
+// 		DEBUG_ONLY "Debug - Scanner started.\n";
+// 		CurrentNamespace.list = &Namespaces;
+// 		CurrentBlock.list = &Blocks;
+// 		CurrentNamespace.position = -1;
+// 		CurrentBlock.position = -1;
+// 		while (!IsAtEnd()) {
+// 			ScanCharacter();
+// 		}
+// 		DEBUG_ONLY "Debug - Scanner finished.\n\n";
+// 	}
+// };
 
-	inline bool IsAtEnd() { return Current >= Tokens.size(); }
-	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
-	inline Token* Advance() { Current++; return &Tokens[Current - 1]; }
+// class Parser { public:
+// 	Enumerated CurrentEnum;
+// 	unsigned Current = 0;
 
-	void Enumerator() {
-		CurrentEnum = Enumerated();
-		string_view Name;
-		unsigned Start = Current - 1;
-		unsigned Consumed = 0;
+// 	inline bool IsAtEnd() { return Current >= Tokens.size(); }
+// 	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
+// 	inline Token* Advance() { Current++; return &Tokens[Current - 1]; }
 
-		CurrentEnum.name.list = &Tokens;
+// 	void Enumerator() {
+// 		CurrentEnum = Enumerated();
+// 		string_view Name;
+// 		unsigned Start = Current - 1;
+// 		unsigned Consumed = 0;
 
-		if(!Tokens[Start].block.get()->parent_namespace.null()) {
-			CurrentEnum.nmspace.position = Tokens[Start].block.get()->parent_namespace.position;
-			CurrentEnum.nmspace.list = &Namespaces;
-		}
+// 		CurrentEnum.name.list = &Tokens;
 
-		if (Tokens[Start + 1].value.compare("class") != 0) { CurrentEnum.name.position = Start + 1; CurrentEnum.is_class = false; Consumed = 1; }
-		else { CurrentEnum.name.position = Start + 2; CurrentEnum.is_class = true; Consumed = 3; }
-		CurrentEnum.block.position = Tokens[Start + Consumed + 1].block.position;
-		CurrentEnum.block.list = &Blocks;
-		Current += Consumed;
+// 		if(!Tokens[Start].block.get()->parent_namespace.null()) {
+// 			CurrentEnum.nmspace.position = Tokens[Start].block.get()->parent_namespace.position;
+// 			CurrentEnum.nmspace.list = &Namespaces;
+// 		}
 
-		DEBUG_ONLY cout << "Debug - Discovered enum '" << CurrentEnum.name.get()->value << "'. Is also class: " << (CurrentEnum.is_class ? "yes.\n" : "no.\n");
-		while (!IsAtEnd()) {
-			Token Next = *Advance();
-			if (!Next.block.equals(CurrentEnum.block)) {
-				DEBUG_ONLY cout << "Debug - Completed parsing enum.\n";
-				Enums.push_back(CurrentEnum);
-				Current--;
-				return;
-			}
-			DEBUG_ONLY cout << "Debug - Parsing token '" << Next.value << "' inside enum.\n";
-		}
-		// This is called only when the file has ended.
-		DEBUG_ONLY cout << "Debug - Completed parsing enum.\n";
-		Enums.push_back(CurrentEnum);
-	}
+// 		if (Tokens[Start + 1].value.compare("class") != 0) { CurrentEnum.name.position = Start + 1; CurrentEnum.is_class = false; Consumed = 1; }
+// 		else { CurrentEnum.name.position = Start + 2; CurrentEnum.is_class = true; Consumed = 3; }
+// 		CurrentEnum.block.position = Tokens[Start + Consumed + 1].block.position;
+// 		CurrentEnum.block.list = &Blocks;
+// 		Current += Consumed;
 
-	void ParseToken() {
-		Token Next = *Advance();
-		if (Next.value.compare("enum") == 0) {
-			DEBUG_ONLY cout << "Debug - Found keyword 'enum'.\n";
-			Enumerator();
-		}
-	}
+// 		DEBUG_ONLY cout << "Debug - Discovered enum '" << CurrentEnum.name.get()->value << "'. Is also class: " << (CurrentEnum.is_class ? "yes.\n" : "no.\n");
+// 		while (!IsAtEnd()) {
+// 			Token Next = *Advance();
+// 			if (!Next.block.equals(CurrentEnum.block)) {
+// 				DEBUG_ONLY cout << "Debug - Completed parsing enum.\n";
+// 				Enums.push_back(CurrentEnum);
+// 				Current--;
+// 				return;
+// 			}
+// 			DEBUG_ONLY cout << "Debug - Parsing token '" << Next.value << "' inside enum.\n";
+// 		}
+// 		// This is called only when the file has ended.
+// 		DEBUG_ONLY cout << "Debug - Completed parsing enum.\n";
+// 		Enums.push_back(CurrentEnum);
+// 	}
 
-	void ParseTokens() {
-		DEBUG_ONLY cout << "Debug - Parser started.\n";
-		while (!IsAtEnd()) {
-			ParseToken();
-		}
-		DEBUG_ONLY cout << "Debug - Parser finished.\n\n";
-	}
-};
+// 	void ParseToken() {
+// 		Token Next = *Advance();
+// 		if (Next.value.compare("enum") == 0) {
+// 			DEBUG_ONLY cout << "Debug - Found keyword 'enum'.\n";
+// 			Enumerator();
+// 		}
+// 	}
 
-class Writer { public:
-	void WriteResult(const string_view& Path) {
-		if (fs::exists(Path)) { fs::remove(Path); }
-		ofstream FileIO = ofstream(Path.data());
-		if (!FileIO.is_open()) {
-			cout << "Error - Couldn't open file.\n";
-			return;
-		}
+// 	void ParseTokens() {
+// 		DEBUG_ONLY cout << "Debug - Parser started.\n";
+// 		while (!IsAtEnd()) {
+// 			ParseToken();
+// 		}
+// 		DEBUG_ONLY cout << "Debug - Parser finished.\n\n";
+// 	}
+// };
 
-		if (Enums.size() == 0) {
-			cout << "Error - There is nothing to write to the file.\n";
-			FileIO.close();
-			return;
-		}
+// class Writer { public:
+// 	void WriteResult(const string_view& Path) {
+// 		if (fs::exists(Path)) { fs::remove(Path); }
+// 		ofstream FileIO = ofstream(Path.data());
+// 		if (!FileIO.is_open()) {
+// 			cout << "Error - Couldn't open file.\n";
+// 			return;
+// 		}
 
-		FileIO << "#ifndef __ENUMTOSTRING_H\n";
-		FileIO << "#define __ENUMTOSTRING_H\n\n";
+// 		if (Enums.size() == 0) {
+// 			cout << "Error - There is nothing to write to the file.\n";
+// 			FileIO.close();
+// 			return;
+// 		}
 
-		FileIO << "#include <ostream>\n";
-		FileIO << "#include <string>\n\n";
+// 		FileIO << "#ifndef __ENUMTOSTRING_H\n";
+// 		FileIO << "#define __ENUMTOSTRING_H\n\n";
 
-		// Declaration of the enum itself, this is not very useful
-		// because it doesn't keep track of the values assigned to
-		// each enumerator in the source file (eg. MY_ENUMERATOR = 1)
-		// but in most cases it is fine.
-		for (Enumerated& FoundEnum : Enums) {
-			DEBUG_ONLY cout << "Debug - Writing enum '" << FoundEnum.name.get()->value << "' to file.\n";
-			FileIO << "// ----\n\n";
-			FileIO << (FoundEnum.is_class ? "enum class " : "enum ") << FoundEnum.name.get()->value << " {\n";
-			for (Token& Enumerator : Tokens) {
-				if (!Enumerator.block.equals(FoundEnum.block)) continue;
-				FileIO << "    " << Enumerator.value << ",\n";
-			}
-			FileIO << "};\n\n";
+// 		FileIO << "#include <ostream>\n";
+// 		FileIO << "#include <string>\n\n";
 
-			FileIO << "std::string __" << FoundEnum.name.get()->value << "ToString(" << FoundEnum.name.get()->value << " Enumerator) {\n";
-			FileIO << "    switch(Enumerator) {\n";
-			for (Token& Enumerator : Tokens) {
-				if (!Enumerator.block.equals(FoundEnum.block)) continue;
-				FileIO << "    case " << FoundEnum.name.get()->value << "::" << Enumerator.value << ": ";
-				FileIO << "return \"" << Enumerator.value << "\";\n";
-			}
-			FileIO << "    }\n";
-			FileIO << "}\n\n";
+// 		// Declaration of the enum itself, this is not very useful
+// 		// because it doesn't keep track of the values assigned to
+// 		// each enumerator in the source file (eg. MY_ENUMERATOR = 1)
+// 		// but in most cases it is fine.
+// 		for (Enumerated& FoundEnum : Enums) {
+// 			DEBUG_ONLY cout << "Debug - Writing enum '" << FoundEnum.name.get()->value << "' to file.\n";
+// 			FileIO << "// ----\n\n";
 
-			FileIO << "std::ostream& operator<<(std::ostream& Stream, " << FoundEnum.name.get()->value << " Enumerator) {\n";
-			FileIO << "    return Stream << __" << FoundEnum.name.get()->value << "ToString(Enumerator);\n";
-			FileIO << "}\n\n";
-			FileIO << "// ----\n\n";
-		}
-		FileIO << "#endif\n";
-		FileIO.close();
-	}
-};
+// 			if(!FoundEnum.nmspace.null()) {
+// 				if(FoundEnum.nmspace.get()->is_anon) {
+// 					FileIO << "namespace {\n";
+// 				} else {
+// 					FileIO << "namespace" << FoundEnum.nmspace.get()->name.get()->value << " {\n";
+// 				}
+// 			}
+
+// 			FileIO << (FoundEnum.is_class ? "enum class " : "enum ") << FoundEnum.name.get()->value << " {\n";
+// 			for (Token& Enumerator : Tokens) {
+// 				if (!Enumerator.block.equals(FoundEnum.block)) continue;
+// 				FileIO << "    " << Enumerator.value << ",\n";
+// 			}
+// 			FileIO << "};\n\n";
+
+// 			FileIO << "std::string " << FoundEnum.name.get()->value << "ToString(" << FoundEnum.name.get()->value << " Enumerator) {\n";
+// 			FileIO << "    switch(Enumerator) {\n";
+// 			for (Token& Enumerator : Tokens) {
+// 				if (!Enumerator.block.equals(FoundEnum.block)) continue;
+// 				FileIO << "    case " << FoundEnum.name.get()->value << "::" << Enumerator.value << ": ";
+// 				FileIO << "return \"" << Enumerator.value << "\";\n";
+// 			}
+// 			FileIO << "    }\n";
+// 			FileIO << "}\n\n";
+
+// 			FileIO << "std::ostream& operator<<(std::ostream& Stream, " << FoundEnum.name.get()->value << " Enumerator) {\n";
+// 			FileIO << "    return Stream << " << FoundEnum.name.get()->value << "ToString(Enumerator);\n";
+// 			FileIO << "}\n\n";
+
+// 			if(!FoundEnum.nmspace.null()) {
+// 				FileIO << "}\n\n";
+// 			}
+// 			FileIO << "// ----\n\n";
+// 		}
+// 		FileIO << "#endif\n";
+// 		FileIO.close();
+// 	}
+// };
 
 int main(int argc, char* argv[]) {
 	string FilePath = " ";
@@ -331,22 +391,17 @@ int main(int argc, char* argv[]) {
 
 	// This code is probably windows-only, I added it for testing purposes only
 	DEBUG_ONLY CLEAR_CONSOLE;
-	DEBUG_ONLY cout << "Debug - Source code:\n" << Source << "\n";
-	DEBUG_ONLY this_thread::sleep_for(chrono::seconds(1));
-	DEBUG_ONLY CLEAR_CONSOLE;
-	DEBUG_ONLY this_thread::sleep_for(chrono::seconds(1));
+	DEBUG_ONLY cout << "Debug - Source code:\n" << Source << "\n\n\n\n\n";
 
-	Scanner MyScanner = Scanner();
-	Parser MyParser = Parser();
-	Writer MyWriter = Writer();
-	MyScanner.ScanSource();
-	MyParser.ParseTokens();
-	
-	string OutputPath = "";
-	cout << "Please enter the path to the file in which you'd like the output to be stored at.\n";
-	cout << ">> "; cin >> OutputPath;
+	Sanitizer MySanitizer = Sanitizer();
+	MySanitizer.SanitizeSource();
 
-	MyWriter.WriteResult(OutputPath);
-	cout << "Info - Process finished.\n";
+	DEBUG_ONLY cout << "Debug - Sanitized code:\n" << Source << "\n";	
+	// string OutputPath = "";
+	// cout << "Please enter the path to the file in which you'd like the output to be stored at.\n";
+	// cout << ">> "; cin >> OutputPath;
+
+	// MyWriter.WriteResult(OutputPath);
+	// cout << "Info - Process finished.\n";
 	return 0;
 }
