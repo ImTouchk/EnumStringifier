@@ -47,22 +47,16 @@ namespace fs = std::filesystem;
 // containers, and classes for actual implementations.
 // Using `public` in structs is deliberate, in order to
 // (hopefully) make their purpose clear.
+
 template <typename T>
 struct VElementPtr { public:
 	vector<T>* list = nullptr;
 	int position = -1;
 
-	inline T* get() const { if(null()) return nullptr; return list[position]; }
+	inline T* get() const { if(null()) return nullptr; return &(*list)[position]; }
 	inline bool null() const { return (position == -1 || list == nullptr); }
 	inline bool equals(const VElementPtr<T>& other) const { return (this->position == other.position); }
 	inline bool operator==(const VElementPtr<T>& other) const { return equals(other); }
-	inline VElementPtr& operator=(const VElementPtr<T>& other) {
-		if(this != &other) {
-			this->position = other.position;
-			this->list = other.list;
-		}
-		return *this;
-	}
 };
 
 struct Block { public:
@@ -114,12 +108,48 @@ class Sanitizer { public:
 
 	void SanitizeSource() {
 		RemoveCharacter('\v'); RemoveCharacter('\t');
-		cout << "Test!\n";
 		for(int i = 1; i < Source.size(); ) {
 			if(Source[i] != ' ') { i++; continue; }
 			if(Source[i] == Source[i - 1]) { Source.erase(i, 1); }
 			else { i++; }
 		}
+	}
+};
+
+class Scanner { public:
+	VElementPtr<Namespace> CurrentNamespace;
+	VElementPtr<Block> CurrentBlock;
+	unsigned Current = 0;
+	char End = '\0';
+
+	inline bool IsAtEnd() { return Current >= Source.size(); }
+	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
+	inline char* Peek() { if(IsAtEnd()) return &End; return &Source[Current]; }
+	inline char* PeekNext() { if(Current + 1 >= Source.size()) return &End; return &Source[Current + 1];}
+	inline char* Advance() { Current++; return &Source[Current - 1]; }
+
+	inline void Identifier() {
+		unsigned Start = Current;
+		while(IsAlpha(*Peek())) Advance();
+		unsigned End = Current;
+
+		Token FoundToken{};
+		FoundToken.start = Start;
+		FoundToken.end = End;
+		FoundToken.value = Source;
+		FoundToken.value.remove_prefix(Start - 1);
+		FoundToken.value.remove_suffix(Source.size() - End);
+		FoundToken.block = VElementPtr<Block>();
+		Tokens.push_back(FoundToken);
+	}
+
+	inline void ScanCharacter() {
+		char Character = *Advance();
+		if(IsAlpha(Character)) Identifier();
+	}
+
+	void ScanSource() {
+		while(!IsAtEnd()) { ScanCharacter(); }
 	}
 };
 
@@ -396,7 +426,12 @@ int main(int argc, char* argv[]) {
 	Sanitizer MySanitizer = Sanitizer();
 	MySanitizer.SanitizeSource();
 
-	DEBUG_ONLY cout << "Debug - Sanitized code:\n" << Source << "\n";	
+	Scanner MyScanner = Scanner();
+	MyScanner.ScanSource();
+
+	for(const Token& FoundToken : Tokens) {
+		cout << FoundToken.value << ",";
+	}
 	// string OutputPath = "";
 	// cout << "Please enter the path to the file in which you'd like the output to be stored at.\n";
 	// cout << ">> "; cin >> OutputPath;
