@@ -28,7 +28,7 @@ namespace fs = std::filesystem;
 #endif
 
 // Not really necessary, but why not.
-#ifdef _WINDOWS
+#ifdef _WIN32
 #undef CLEAR_CONSOLE
 #define CLEAR_CONSOLE system("cls")
 #endif
@@ -91,11 +91,11 @@ struct Enumerated { public:
 };
 
 // Global variable declarations
-vector<Enumerated> Enums;
-vector<Namespace> Namespaces;
-vector<Token> Tokens;
-vector<Block> Blocks;
-string Source;
+static vector<Enumerated> Enums;
+static vector<Namespace> Namespaces;
+static vector<Token> Tokens;
+static vector<Block> Blocks;
+static string Source;
 
 // Actual implementation
 
@@ -147,173 +147,66 @@ class Scanner { public:
 	VElementPtr<Namespace> CurrentNamespace;
 	VElementPtr<Block> CurrentBlock;
 	unsigned Current = 0;
+	unsigned Line = 1;
 	char End = '\0';
 
 	inline bool IsAtEnd() { return Current >= Source.size(); }
 	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
-	inline char* Peek() { if(IsAtEnd()) return &End; return &Source[Current]; }
-	inline char* PeekNext() { if(Current + 1 >= Source.size()) return &End; return &Source[Current + 1];}
+	inline bool IsNumeric(char& Character) { return (Character >= '0' || Character <= '9'); }
+	inline char* Peek() { if (IsAtEnd()) { return &End; } return &Source[Current + 1]; }
 	inline char* Advance() { Current++; return &Source[Current - 1]; }
 
-	inline void BeginBlock() {
-		Block FoundBlock{};
-		FoundBlock.nmspace = "";
-		FoundBlock.start = Current;
-		FoundBlock.parent.list = &Blocks;
-		if(!CurrentBlock.null()) { FoundBlock.parent.position = CurrentBlock.position; }
-		Blocks.push_back(FoundBlock);
-		CurrentBlock.list = &Blocks;
-		CurrentBlock.position = (Blocks.size() - 1);
-	}
-
-	inline void EndBlock() {
-		if(CurrentBlock.null()) { cout << "Error - Found unexpected '}'.\n"; return; }
-		CurrentBlock.get()->end = Current;
-		CurrentBlock.position = CurrentBlock.get()->parent.position;
-	}
-
-	inline void Identifier() {
-		unsigned Start = Current;
-		while(IsAlpha(*Peek())) Advance();
-		unsigned End = Current;
-
-		Token FoundToken{};
+	void Identifier() {
+		unsigned Start = Current - 1;
+		while (IsAlpha(*Peek()) || IsNumeric(*Peek())) Advance();
+		unsigned End = Current - 1;
+		
+		Token FoundToken;
+		FoundToken.block.list = &Blocks;
+		FoundToken.block.position = CurrentBlock.position;
 		FoundToken.start = Start;
 		FoundToken.end = End;
-		FoundToken.value = Source;
-		FoundToken.value.remove_prefix(Start - 1);
+		FoundToken.value = string_view(Source);
+		FoundToken.value.remove_prefix(Start);
 		FoundToken.value.remove_suffix(Source.size() - End);
-		FoundToken.block = VElementPtr<Block>();
 		Tokens.push_back(FoundToken);
 	}
 
-	inline void ScanCharacter() {
-		char Character = *Advance();
-		switch(Character) {
-			case '{': BeginBlock(); break;
-			case '}': EndBlock(); break;
-			default: if(IsAlpha(Character)) Identifier(); break;
+	void BeginBlock() {
+		Block FoundBlock;
+		FoundBlock.nmspace = "";
+		FoundBlock.start = Current - 1;
+		FoundBlock.parent.list = &Blocks;
+		if (!CurrentBlock.null()) { FoundBlock.parent.position = CurrentBlock.position; }
+		Blocks.push_back(FoundBlock);
+		CurrentBlock.list = &Blocks;
+		CurrentBlock.position = Blocks.size() - 1;
+	}
+
+	void EndBlock() {
+		if (CurrentBlock.null()) {
+			cout << "Error - Unexpected '}' at line " << Line << ".\n";
+			return;
 		}
+		CurrentBlock.get()->end = Current - 1;
+		CurrentBlock.position = CurrentBlock.get()->parent.position;
 	}
 
 	void ScanSource() {
-		while(!IsAtEnd()) { ScanCharacter(); }
+		while (!IsAtEnd()) {
+			char Character = *Advance();
+			switch (Character) {
+			case '{': BeginBlock(); break;
+			case '}': EndBlock(); break;
+			case '\n': Line++; break;
+			default: {
+				if (IsAlpha(Character)) { Identifier(); }
+				break;
+			}
+			}
+		}
 	}
 };
-
-// class Scanner { public:
-// 	VElementPtr<Namespace> CurrentNamespace;
-// 	VElementPtr<Block> CurrentBlock;
-// 	unsigned Current = 0;
-// 	unsigned Line = 0;
-// 	char End = '\0';
-
-// 	inline bool IsAtEnd() { return Current >= Source.size(); }
-// 	inline bool IsAlpha(char& Character) { return (Character >= 'a' && Character <= 'z') || (Character >= 'A' && Character <= 'Z') || Character == '_'; }
-// 	inline bool IsNumeric(char& Character) { return Character >= '0' && Character <= '9'; }
-// 	inline char* Peek() { if (IsAtEnd()) return &End; return &Source[Current]; }
-// 	inline char* PeekNext() { if (Current + 1 >= Source.size()) return &End; return &Source[Current + 1]; }
-// 	inline char* Advance() { Current++; return &Source[Current - 1]; }
-
-// 	void Identifier() {
-// 		unsigned Start = Current - 1;
-// 		while (IsAlpha(*Peek())) Advance();
-// 		Token FoundToken;
-// 		FoundToken.block.position = CurrentBlock.position;
-// 		FoundToken.block.list = &Blocks;
-// 		FoundToken.start = Start;
-// 		FoundToken.end = Current;
-// 		FoundToken.value = Source;
-// 		FoundToken.value.remove_prefix(Start);
-// 		FoundToken.value.remove_suffix(Source.size() - Current);
-// 		Tokens.push_back(FoundToken);
-
-// 		if(FoundToken.value.compare("namespace") == 0) { BeginNamespace(); }
-// 	}
-
-// 	void BeginNamespace() {
-// 		Namespace FoundNamespace;
-// 		FoundNamespace.name.list = &Tokens;
-// 		FoundNamespace.parent.list = &Namespaces;
-// 		FoundNamespace.parent.position = CurrentNamespace.position;
-// 		FoundNamespace.start = Current;
-		
-// 		while(*Peek() == ' ') Current++;
-
-// 		if(*Peek() == '{') {
-// 			Advance();
-// 			FoundNamespace.is_anon = true;
-// 			FoundNamespace.name.position = -1;
-// 			DEBUG_ONLY cout << "Debug - Found anonymous namespace.\n";
-// 		} else {
-// 			while(*Peek() == ' ') { Current++; } Identifier();
-// 			FoundNamespace.is_anon = false;
-// 			FoundNamespace.name.position = (Tokens.size() - 1);
-// 			DEBUG_ONLY cout << "Debug - Found namespace '" << FoundNamespace.name.get()->value << "'.\n";
-// 		}
-
-// 		Namespaces.push_back(FoundNamespace);
-// 		CurrentNamespace.position = (Namespaces.size() - 1);
-// 		CurrentNamespace.list = &Namespaces;
-// 	}
-
-// 	void TryEndNamespace() {
-// 		if(CurrentNamespace.null()) return;
-// 		DEBUG_ONLY if(!CurrentNamespace.get()->name.null()) cout << "Debug - Ended namespace '" << CurrentNamespace.get()->name.get()->value << "'.\n";
-// 		CurrentNamespace.get()->end = Current;
-// 		CurrentNamespace.position = CurrentNamespace.get()->parent.position;
-// 	}
-
-// 	void BeginBlock() {
-// 		Block FoundBlock;
-// 		FoundBlock.parent_namespace.position = CurrentNamespace.position;
-// 		FoundBlock.parent_namespace.list = &Namespaces;
-// 		FoundBlock.parent.position = CurrentBlock.position;
-// 		FoundBlock.parent.list = &Blocks;
-// 		FoundBlock.start = Current;
-// 		Blocks.push_back(FoundBlock);
-// 		CurrentBlock.list = &Blocks;
-// 		CurrentBlock.position = (Blocks.size() - 1);
-// 	}
-
-// 	void EndBlock() {
-// 		if (CurrentBlock.null()) { cout << "Error - Unexpected '}' found at line " << Line << ".\n"; return; }
-// 		TryEndNamespace();
-// 		CurrentBlock.get()->end = Current;
-// 		CurrentBlock.position = CurrentBlock.get()->parent.position;
-// 	}
-
-// 	void SkipLine() {
-// 		while (!IsAtEnd()) {
-// 			char Character = *Advance();
-// 			if (Character == '\n') { Line++; return; }
-// 		}
-// 	}
-
-// 	inline void ScanCharacter() {
-// 		char Character = *Advance();
-// 		switch (Character) {
-// 		case '/': if (*Peek() == '/') SkipLine(); break;
-// 		case '#': SkipLine(); break;
-// 		case '\n': Line++; break;
-// 		case '{': BeginBlock(); break;
-// 		case '}': EndBlock(); break;
-// 		default: if (IsAlpha(Character)) Identifier(); break;
-// 		}
-// 	}
-
-// 	void ScanSource() {
-// 		DEBUG_ONLY "Debug - Scanner started.\n";
-// 		CurrentNamespace.list = &Namespaces;
-// 		CurrentBlock.list = &Blocks;
-// 		CurrentNamespace.position = -1;
-// 		CurrentBlock.position = -1;
-// 		while (!IsAtEnd()) {
-// 			ScanCharacter();
-// 		}
-// 		DEBUG_ONLY "Debug - Scanner finished.\n\n";
-// 	}
-// };
 
 // class Parser { public:
 // 	Enumerated CurrentEnum;
@@ -467,24 +360,10 @@ int main(int argc, char* argv[]) {
 		Source = Temporary.str();
 	}
 
-	// This code is probably windows-only, I added it for testing purposes only
-	DEBUG_ONLY CLEAR_CONSOLE;
-	DEBUG_ONLY cout << "Debug - Source code:\n" << Source << "\n\n\n\n\n";
-
-	Sanitizer MySanitizer = Sanitizer();
+	Sanitizer MySanitizer;
 	MySanitizer.SanitizeSource();
 
-	DEBUG_ONLY CLEAR_CONSOLE;
-	DEBUG_ONLY cout << "Debug - Sanitized code:\n" << Source;
-
-	Scanner MyScanner = Scanner();
+	Scanner MyScanner;
 	MyScanner.ScanSource();
-
-	// string OutputPath = "";
-	// cout << "Please enter the path to the file in which you'd like the output to be stored at.\n";
-	// cout << ">> "; cin >> OutputPath;
-
-	// MyWriter.WriteResult(OutputPath);
-	// cout << "Info - Process finished.\n";
 	return 0;
 }
